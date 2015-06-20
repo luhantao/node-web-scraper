@@ -1,7 +1,0 @@
-{
-	"threads" : "10",
-	"interval" : "1000",
-	"entrance_url" : [
-		"http://www.soku.com/search_video/q_%E7%8E%8B%E4%BF%8A%E5%87%AF_orderby_1_page_1"
-	]
-}

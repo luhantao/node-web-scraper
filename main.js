@@ -5,13 +5,15 @@ var fs = require('fs'),
 	hostUrl = '',			//当前主机地址
 	threads = 1,			//线程数
 	interval = 100,			//间隔时间
-	taskQueue = [];			//主任务队列
+	workQueue = [],			//主工作队列
+	taskName = '',			//当前任务名（用于txt输出）
+	configTaskQueue = [];	//配置文件入口url队列
 
 
 //读取config.txt
 function getConfig() {
 	return new Promise(function(resolve, reject){
-		fs.readFile('./txt/config.txt', 'utf-8', function(err, data){
+		fs.readFile('./config/config.txt', 'utf-8', function(err, data){
 			if (err){
 				reject(err);
 				return ;
@@ -22,13 +24,18 @@ function getConfig() {
 				threads = parseInt(config['threads']);
 				interval = parseInt(config['interval']);
 
-				entrance_url = config['entrance_url'][0];
+				configTaskQueue = config['tasks'];
+				var entrance = configTaskQueue.shift();
+				var entrance_url = entrance['url'];
+				//全局记录当前任务名
+				taskName = entrance['name'];
+
 				//取出主机地址
 				hostUrl = entrance_url.replace(/http(s*):\/\//, '');
 				hostUrl = hostUrl.split('/')[0];
 				
-				//将入口url，推入任务队列
-				taskQueue.push(entrance_url);
+				//将入口url，推入主工作队列
+				workQueue.push(entrance_url);
 				resolve();
 			}
 			catch (err){
@@ -42,15 +49,14 @@ function getConfig() {
 
 //清空原有urls.txt，videoInfo.txt
 function cleanFiles(){
-
 	return new Promise(function(resolve, reject){
-		fs.writeFile('txt/urls.txt', '', {"encoding":"utf-8"}, function(err){
+		fs.writeFile('website/'+hostUrl+'/output_data/'+taskName+'_urls.txt', '', {"encoding":"utf-8"}, function(err){
 			if (err){
 				reject(err);
 				return ;
 			}
 			//非常不好的嵌套写法，但暂时没想到同时处理异步的方法，会有bug。。。
-			fs.writeFile('txt/videoInfo.txt', '', {"encoding":"utf-8"}, function(err){
+			fs.writeFile('website/'+hostUrl+'/output_data/'+taskName+'_videoInfo.txt', '', {"encoding":"utf-8"}, function(err){
 				if (err){
 					reject(err);
 					return ;
@@ -107,7 +113,7 @@ Worker.prototype.writeData = function(data){
 	var urls_to_Write = '';
 	for (var i = 0; i < data.grabUrls.length; i++) {
 		//将爬回来的url，推入任务队列
-		taskQueue.push(data.grabUrls[i]);
+		workQueue.push(data.grabUrls[i]);
 		urls_to_Write += data.grabUrls[i] + '\n';
 	}
 
@@ -116,14 +122,14 @@ Worker.prototype.writeData = function(data){
 	return new Promise(function(resolve, reject){
 		//grabUrls数组不为空
 		if (urls_to_Write != ''){
-			fs.appendFile('./txt/urls.txt', urls_to_Write, 'utf-8', function(err){
+			fs.appendFile('website/'+hostUrl+'/output_data/'+taskName+'_urls.txt', urls_to_Write, 'utf-8', function(err){
 				if (err){
 					reject(err);
 					return ;
 				}
 				//电影信息对象不为空
 				if (!_.isEmpty(data.videoInfo)){
-					fs.appendFile('./txt/videoInfo.txt', data.videoInfo + '\n', 'utf-8', function(err){
+					fs.appendFile('website/'+hostUrl+'/output_data/'+taskName+'_videoInfo.txt', data.videoInfo + '\n', 'utf-8', function(err){
 						if (err){
 							reject(err);
 							return ;
@@ -156,6 +162,7 @@ Worker.prototype.startup = function(){
 		return arg.worker(arg.url);
 	})
 	.then(function(data){
+		//写获得数据
 		return that.writeData(data);
 	})
 	.then(function(){
@@ -164,6 +171,7 @@ Worker.prototype.startup = function(){
 		console.log('sucessfully grab ' + that.url);
 	})
 	.catch(function(err){
+		//任务除错，抛弃任务
 		that.working = false;
 		console.log(err);
 	});
@@ -173,8 +181,6 @@ Worker.prototype.startup = function(){
 //入口函数
 function main(){
 	//读取配置 + 清空原有数据
-
-	
 	getConfig()
 	.then(function(){
 		return cleanFiles();
@@ -188,20 +194,20 @@ function main(){
 		}
 		//根据间隔，定时检查worker状态
 		setInterval(function(){
-			console.log(taskQueue.length)
+			//console.log(workQueue.length)
 			//有未处理任务
 			for (var i = 0; i < threads; i++) {
-				if (taskQueue.length > 0){
-					//console.log(workerArray[i].working)
-					//worker空闲
+				if (workQueue.length > 0){
+					//worker空闲，派发新任务
 					if (!workerArray[i].working){
-						var taskUrl = taskQueue.shift();
+						var taskUrl = workQueue.shift();
 						workerArray[i].url = taskUrl;
 						workerArray[i].startup();
 					}
 				}
 				else{
-					break;
+					//暂时任务队列为空
+					break ;
 				}
 			}
 		}, interval);
@@ -211,5 +217,3 @@ function main(){
 
 //主入口
 main();
-
-
