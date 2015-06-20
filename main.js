@@ -1,16 +1,18 @@
-var fs = require('fs'),
-	Promise = require('bluebird'),
-	_ = require('underscore'),
+var fs = require('fs'),					//读写文件模块
+	Promise = require('bluebird'),		//Promise模块
+	_ = require('underscore'),			//underscore模块
 
-	hostUrl = '',			//当前主机地址
-	threads = 1,			//线程数
-	interval = 100,			//间隔时间
-	workQueue = [],			//主工作队列
+	threads = 1,			//默认线程数
+	task,					//当前任务对象
 	taskName = '',			//当前任务名（用于txt输出）
-	configTaskQueue = [];	//配置文件入口url队列
+	taskUrl = '',			//当前任务url
+	hostUrl = '',			//当前主机地址
+	configTaskQueue = [],	//配置文件入口，任务队列
+	workQueue = [],			//任务的对应主工作队列
+	workerArray = [];		//worker数组
 
 
-//读取config.txt
+//读取config.txt配置文件
 function getConfig() {
 	return new Promise(function(resolve, reject){
 		fs.readFile('./config/config.txt', 'utf-8', function(err, data){
@@ -22,29 +24,50 @@ function getConfig() {
 			try{
 				var config = JSON.parse(data);
 				threads = parseInt(config['threads']);
-				interval = parseInt(config['interval']);
-
 				configTaskQueue = config['tasks'];
-				var entrance = configTaskQueue.shift();
-				var entrance_url = entrance['url'];
-				//全局记录当前任务名
-				taskName = entrance['name'];
 
-				//取出主机地址
-				hostUrl = entrance_url.replace(/http(s*):\/\//, '');
-				hostUrl = hostUrl.split('/')[0];
-				
-				//将入口url，推入主工作队列
-				workQueue.push(entrance_url);
+				//根据线程数，初始化worker
+				for (var i = 0; i < threads; i++) {
+					var worker = new Worker();
+					worker.num = i+1;
+					workerArray.push(worker);
+				}
+
 				resolve();
 			}
 			catch (err){
-				console.log(err);
+				console.error(err);
 				reject(err);
 			}
 		});	
-
 	});	
+}
+
+//根据configTaskQueue中读入的任务，取出第一个，并初始化全局变量
+function getStart(){
+	return new Promise(function(resolve, reject){
+		if (configTaskQueue.length > 0){
+			var getNewTask = configTaskQueue.shift();
+			//全局记录当前任务
+			taskName = getNewTask['name'];
+			taskUrl = getNewTask['url'];
+
+			//取出根域名
+			hostUrl = taskUrl.replace(/http(s*):\/\//, '');
+			hostUrl = hostUrl.split('/')[0];
+			workQueue.push(taskUrl);
+
+			console.log('================================');
+			console.log('Start grabbing task: ' + taskName);
+			console.log('================================');
+
+			resolve();
+		}
+		else{
+			console.error('Get tasks in "config.txt" err!');
+			reject();
+		}
+	});
 }
 
 //清空原有urls.txt，videoInfo.txt
@@ -55,7 +78,7 @@ function cleanFiles(){
 				reject(err);
 				return ;
 			}
-			//非常不好的嵌套写法，但暂时没想到同时处理异步的方法，会有bug。。。
+			//非常不好的嵌套写法（慢！），但暂时没想到，同时处理异步的方法，会有bug。。。
 			fs.writeFile('website/'+hostUrl+'/output_data/'+taskName+'_videoInfo.txt', '', {"encoding":"utf-8"}, function(err){
 				if (err){
 					reject(err);
@@ -70,6 +93,7 @@ function cleanFiles(){
 //主Worker类
 function Worker(){
 	this.working = false;
+	this.num = 0;
 	this.url = '';
 }
 
@@ -106,7 +130,6 @@ Worker.prototype.queryRouter = function(url){
 	});
 
 }
-
 
 //Worker获得数据后写入到文件
 Worker.prototype.writeData = function(data){
@@ -148,11 +171,12 @@ Worker.prototype.writeData = function(data){
 	});
 }
 
-//Worker启动函数
+//Worker启动工作函数
 Worker.prototype.startup = function(){
 	var that = this;
 	//将工作状态置为true
 	that.working = true;
+	console.log('Thread ' + that.num + ' start -> ' + that.url);
 
 	//启动工作
 	that
@@ -168,52 +192,96 @@ Worker.prototype.startup = function(){
 	.then(function(){
 		//工作完成，将worker状态置为false
 		that.working = false;
-		console.log('sucessfully grab ' + that.url);
+		console.log('Thread ' + that.num + ' finish -> ' + that.url);
 	})
 	.catch(function(err){
 		//任务除错，抛弃任务
 		that.working = false;
-		console.log(err);
+		console.error('Thread ' + that.num + ' ' +err);
 	});
 }
 
 
-//入口函数
-function main(){
-	//读取配置 + 清空原有数据
-	getConfig()
-	.then(function(){
-		return cleanFiles();
-	})
-	.then(function(){
-		//根据线程数，初始化worker
-		var workerArray = [];
-		for (var i = 0; i < threads; i++) {
-			var worker = new Worker();
-			workerArray.push(worker);
-		}
-		//根据间隔，定时检查worker状态
-		setInterval(function(){
-			//console.log(workQueue.length)
-			//有未处理任务
-			for (var i = 0; i < threads; i++) {
-				if (workQueue.length > 0){
-					//worker空闲，派发新任务
-					if (!workerArray[i].working){
-						var taskUrl = workQueue.shift();
-						workerArray[i].url = taskUrl;
-						workerArray[i].startup();
+//task工作类。同时刻只能有一个活动对象
+function Task(){
+	var worker_interval;
+	//初始启动 + 配置全局变量 + 清空原有数据
+	this.init = function(){
+		getStart()
+		.then(function(){
+			return cleanFiles();
+		})
+		.then(function(){
+			//定时检查worker状态
+			worker_interval = setInterval(function(){
+				//有未处理任务
+				for (var i = 0; i < threads; i++) {
+					if (workQueue.length > 0){
+						//worker空闲，派发新任务
+						if (!workerArray[i].working){
+							var taskUrl = workQueue.shift();
+							workerArray[i].url = taskUrl;
+							workerArray[i].startup();
+						}
+					}
+					else{
+						//暂时任务队列为空
+						break ;
 					}
 				}
+			}, 100);
+		})
+	};
+	this.done = function(){
+		clearInterval(worker_interval);
+	};
+}
+
+//主入口函数
+function main(){
+	//初始调用getConfig，然后启动任务函数
+	getConfig()
+	.then(function(){
+		task = new Task();
+		task.init();
+	})
+	.catch(function(err){
+		console.error(err);
+		task.done();
+		task = null;
+	});
+
+	//定时检查当前task是否已完成
+	var task_interval = setInterval(function(){
+		if (workQueue.length == 0){
+			//有worker处于工作状态，未完成
+			var notFinish = _.some(workerArray, function(worker){
+				return worker.working;
+			});
+			
+			//所有worker空闲，证明原任务已完成
+			if (!notFinish){
+				//清空原任务
+				task.done();
+				task = null;
+				console.log(' ');
+				console.log('current task done! Getting new task...');
+				console.log(' ');
+				//若有，则取下一个任务
+				if (configTaskQueue.length > 0){
+					task = new Task();
+					task.init();			
+				}
+				//config.txt中所有任务对已经完成，结束程序！
 				else{
-					//暂时任务队列为空
-					break ;
+					console.log('All tasks in "config.txt" has been dong!!!');
+					clearInterval(task_interval);
 				}
 			}
-		}, interval);
-	})
+		}
+	}, 5*1000);
 }
 
 
-//主入口
+//入口
 main();
