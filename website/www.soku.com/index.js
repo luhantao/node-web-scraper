@@ -18,16 +18,27 @@ module.exports = function (url) {
             //cheerio解析页面源码
             $ = cheerio.load(body); 
 
-            for (var i = 0; i < $('.sk_result .v .v-link a').length; i++) {
-                grabUrls.push($('.sk_result .v .v-link a').eq(i).attr('href'))
-            }
+            try{
+                //视频url
+                for (var i = 0; i < $('.sk_result .v .v-link a').length; i++) {
+                    grabUrls.push($('.sk_result .v .v-link a').eq(i).attr('href'));
+                }
 
-            var data = {
-                grabUrls: grabUrls,
-                videoInfo: videoInfo
-            }
+                //翻页url
+                for (var i = 0; i < $('.sk_pager a').length; i++) {
+                    grabUrls.push('http://www.soku.com' + $('.sk_pager a').eq(i).attr('href'));
+                }
 
-            resolve(data);
+                var data = {
+                    grabUrls: grabUrls,
+                    videoInfo: videoInfo
+                }
+
+                resolve(data);
+            }
+            catch(err){
+                console.log(err);
+            }
         });
     })
 };

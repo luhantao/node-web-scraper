@@ -1,13 +1,13 @@
 {
-	"threads" : "1",	
+	"threads" : "50",
 	"tasks" : [
 		{
 			"name": "王俊凯",
 			"url": "http://www.soku.com/search_video/q_%E7%8E%8B%E4%BF%8A%E5%87%AF_orderby_1"
 		},
 		{
-			"name": "TFBoys",
-			"url": "http://www.soku.com/v?keyword=tfboys&f=1&kb=01122010kv41000__tf"
+			"name": "王源",
+			"url": "http://www.soku.com/search_video/q_%E7%8E%8B%E6%BA%90?f=1&kb=020200000000000_%E7%8E%8B%E4%BF%8A%E5%87%AF_%E7%8E%8B%E6%BA%90"
 		}
 	]
 }

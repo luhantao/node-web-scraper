@@ -2,14 +2,15 @@ var fs = require('fs'),					//读写文件模块
 	Promise = require('bluebird'),		//Promise模块
 	_ = require('underscore'),			//underscore模块
 
-	threads = 1,			//默认线程数
-	task,					//当前任务对象
-	taskName = '',			//当前任务名（用于txt输出）
-	taskUrl = '',			//当前任务url
-	hostUrl = '',			//当前主机地址
-	configTaskQueue = [],	//配置文件入口，任务队列
-	workQueue = [],			//任务的对应主工作队列
-	workerArray = [];		//worker数组
+	threads = 1,						//默认线程数
+	task,								//当前任务对象
+	taskName = '',						//当前任务名（用于txt输出）
+	taskUrl = '',						//当前任务url
+	hostUrl = '',						//当前主机地址
+	configTaskQueue = [],				//配置文件入口，任务队列
+	workQueue = [],						//任务的对应主工作队列
+	hasDone = [],						//去重，记录所有已爬取过的url
+	workerArray = [];					//worker数组
 
 
 //读取config.txt配置文件
@@ -73,19 +74,27 @@ function getStart(){
 //清空原有urls.txt，videoInfo.txt
 function cleanFiles(){
 	return new Promise(function(resolve, reject){
+		var write_cnt = 0;
+		function finish_writing(){
+			if (write_cnt == 2){
+				resolve();
+			}
+		}
 		fs.writeFile('website/'+hostUrl+'/output_data/'+taskName+'_urls.txt', '', {"encoding":"utf-8"}, function(err){
 			if (err){
 				reject(err);
 				return ;
 			}
-			//非常不好的嵌套写法（慢！），但暂时没想到，同时处理异步的方法，会有bug。。。
-			fs.writeFile('website/'+hostUrl+'/output_data/'+taskName+'_videoInfo.txt', '', {"encoding":"utf-8"}, function(err){
-				if (err){
-					reject(err);
-					return ;
-				}
-				resolve();
-			});
+			write_cnt ++;
+			finish_writing();
+		});
+		fs.writeFile('website/'+hostUrl+'/output_data/'+taskName+'_videoInfo.txt', '', {"encoding":"utf-8"}, function(err){
+			if (err){
+				reject(err);
+				return ;
+			}
+			write_cnt++;
+			finish_writing();
 		});
 	});
 }
@@ -134,40 +143,53 @@ Worker.prototype.queryRouter = function(url){
 //Worker获得数据后写入到文件
 Worker.prototype.writeData = function(data){
 	var urls_to_Write = '';
+
 	for (var i = 0; i < data.grabUrls.length; i++) {
-		//将爬回来的url，推入任务队列
-		workQueue.push(data.grabUrls[i]);
-		urls_to_Write += data.grabUrls[i] + '\n';
+		if (_.indexOf(hasDone, data.grabUrls[i]) == -1){
+			//若url未被爬取过，推入去重数组
+			hasDone.push(data.grabUrls[i]);	
+			//推入任务队列
+			workQueue.push(data.grabUrls[i]);
+			urls_to_Write += data.grabUrls[i] + '\n';
+		}
 	}
 
-	var Info = data.videoInfo;
-
 	return new Promise(function(resolve, reject){
-		//grabUrls数组不为空
+		//记录写文件状态
+		var need_cnt = 0,
+			finish_cnt = 0;
+
+		//确保两个文件都写完才调用resolve
+		function finish_writing(){
+			if (need_cnt == finish_cnt){
+				resolve();
+			}
+		}
+		//视频urls数组
 		if (urls_to_Write != ''){
+			need_cnt ++;
 			fs.appendFile('website/'+hostUrl+'/output_data/'+taskName+'_urls.txt', urls_to_Write, 'utf-8', function(err){
 				if (err){
 					reject(err);
 					return ;
 				}
-				//电影信息对象不为空
-				if (!_.isEmpty(data.videoInfo)){
-					fs.appendFile('website/'+hostUrl+'/output_data/'+taskName+'_videoInfo.txt', data.videoInfo + '\n', 'utf-8', function(err){
-						if (err){
-							reject(err);
-							return ;
-						}
-						resolve();
-					})
+				finish_cnt ++;
+				finish_writing();
+			});
+		}
+		//单个视频具体信息
+		if (!_.isEmpty(data.videoInfo)){
+			need_cnt ++;
+			fs.appendFile('website/'+hostUrl+'/output_data/'+taskName+'_videoInfo.txt', JSON.stringify(data.videoInfo) + '\n\n', 'utf-8', function(err){
+				if (err){
+					reject(err);
+					return ;
 				}
-				else{
-					resolve();
-				}
+				finish_cnt++;
+				finish_writing();
 			})
 		}
-		else{
-			resolve();
-		}
+
 	});
 }
 
@@ -192,7 +214,7 @@ Worker.prototype.startup = function(){
 	.then(function(){
 		//工作完成，将worker状态置为false
 		that.working = false;
-		console.log('Thread ' + that.num + ' finish -> ' + that.url);
+		console.log('Thread ' + that.num + ' finish');
 	})
 	.catch(function(err){
 		//任务除错，抛弃任务
@@ -204,7 +226,7 @@ Worker.prototype.startup = function(){
 
 //task工作类。同时刻只能有一个活动对象
 function Task(){
-	var worker_interval;
+	var interval_handle;
 	//初始启动 + 配置全局变量 + 清空原有数据
 	this.init = function(){
 		getStart()
@@ -212,8 +234,8 @@ function Task(){
 			return cleanFiles();
 		})
 		.then(function(){
-			//定时检查worker状态
-			worker_interval = setInterval(function(){
+			//每相隔(100)毫秒，定时检查worker状态
+			interval_handle = setInterval(function(){
 				//有未处理任务
 				for (var i = 0; i < threads; i++) {
 					if (workQueue.length > 0){
@@ -233,7 +255,7 @@ function Task(){
 		})
 	};
 	this.done = function(){
-		clearInterval(worker_interval);
+		clearInterval(interval_handle);
 	};
 }
 
@@ -251,8 +273,8 @@ function main(){
 		task = null;
 	});
 
-	//定时检查当前task是否已完成
-	var task_interval = setInterval(function(){
+	//每隔(5)秒，定时检查当前task是否已完成
+	var interval_handle = setInterval(function(){
 		if (workQueue.length == 0){
 			//有worker处于工作状态，未完成
 			var notFinish = _.some(workerArray, function(worker){
@@ -275,11 +297,11 @@ function main(){
 				//config.txt中所有任务对已经完成，结束程序！
 				else{
 					console.log('All tasks in "config.txt" has been dong!!!');
-					clearInterval(task_interval);
+					clearInterval(interval_handle);
 				}
 			}
 		}
-	}, 5*1000);
+	}, 1*1000);
 }
 
 

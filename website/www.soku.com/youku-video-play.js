@@ -14,21 +14,30 @@ module.exports = function (url) {
                 reject(err);
                 return ;
             }
-            console.log(body.substr(0,50))
+
             //cheerio解析页面源码
             $ = cheerio.load(body); 
-            /*
-                ...
-                code goes here...
-                ...
-            */
+            try{
+                videoInfo = {
+                    title: $('meta[name="irTitle"]').attr('content'),
+                    keywords: $('meta[name="keywords"]').attr('content'),
+                    descirption: $('meta[name="descirption"]').attr('content'),
+                    category: $('meta[name="irCategory"]').attr('content'),
+                    url: url,
+                    like: $('#upVideoTimes').text(),
+                    unlike: $('#downVideoTimes').text(),
+                }
 
-            var data = {
-                grabUrls: grabUrls,
-                videoInfo: videoInfo
+                var data = {
+                    grabUrls: grabUrls,
+                    videoInfo: videoInfo
+                }
+
+                resolve(data);
             }
-
-            resolve(data);
+            catch(err){
+                console.log(err);
+            }
         });
     })
 };
