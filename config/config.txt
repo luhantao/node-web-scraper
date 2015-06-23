@@ -1,5 +1,5 @@
 {
-	"threads" : "50",
+	"threads" : "30",
 	"tasks" : [
 		{
 			"name": "王俊凯",

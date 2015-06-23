@@ -101,9 +101,10 @@ function cleanFiles(){
 
 //主Worker类
 function Worker(){
-	this.working = false;
-	this.num = 0;
-	this.url = '';
+	this.working = false;		//工作状态
+	this.num = 0;				//线程号
+	this.url = '';				//当前工作中url
+	this.startTime;				//记录任务开始时间
 }
 
 //Worker加载url对应路由，找出处理文件
@@ -196,6 +197,10 @@ Worker.prototype.writeData = function(data){
 //Worker启动工作函数
 Worker.prototype.startup = function(){
 	var that = this;
+
+	var date = new Date();
+	that.startTime = date.getTime();
+
 	//将工作状态置为true
 	that.working = true;
 	console.log('Thread ' + that.num + ' start -> ' + that.url);
@@ -214,7 +219,7 @@ Worker.prototype.startup = function(){
 	.then(function(){
 		//工作完成，将worker状态置为false
 		that.working = false;
-		console.log('Thread ' + that.num + ' finish');
+		console.log('Thread ' + that.num + ' finish!');
 	})
 	.catch(function(err){
 		//任务除错，抛弃任务
@@ -226,7 +231,8 @@ Worker.prototype.startup = function(){
 
 //task工作类。同时刻只能有一个活动对象
 function Task(){
-	var interval_handle;
+	var interval_handle1,
+		interval_handle2;
 	//初始启动 + 配置全局变量 + 清空原有数据
 	this.init = function(){
 		getStart()
@@ -234,8 +240,8 @@ function Task(){
 			return cleanFiles();
 		})
 		.then(function(){
-			//每相隔(100)毫秒，定时检查worker状态
-			interval_handle = setInterval(function(){
+			//每相隔(200)毫秒，定时检查worker状态。空闲则分配新任务
+			interval_handle1 = setInterval(function(){
 				//有未处理任务
 				for (var i = 0; i < threads; i++) {
 					if (workQueue.length > 0){
@@ -251,11 +257,29 @@ function Task(){
 						break ;
 					}
 				}
-			}, 100);
+			}, 200);
+
+			//每相隔(5)秒，检查worker是否已超时。超时时间(10)秒
+			interval_handle2 = setInterval(function(){
+				var date = new Date();
+				var time = date.getTime();
+				for (var i = 0; i < threads; i++) {
+					if (time - workerArray[i].startTime > 10*1000){
+						var num = workerArray[i].num;
+						var url = workerArray[i].url;
+						console.log('Thread ' + num + ' timeout!!!Start a new thread!');
+						workerArray[i] = new Worker();
+						workerArray[i].num = num;
+
+						workQueue.push(url);
+					}
+				}
+			}, 5*1000)	;
 		})
 	};
 	this.done = function(){
-		clearInterval(interval_handle);
+		clearInterval(interval_handle1);
+		clearInterval(interval_handle2);
 	};
 }
 
@@ -273,7 +297,7 @@ function main(){
 		task = null;
 	});
 
-	//每隔(5)秒，定时检查当前task是否已完成
+	//每隔(10)秒，定时检查当前task是否已完成
 	var interval_handle = setInterval(function(){
 		if (workQueue.length == 0){
 			//有worker处于工作状态，未完成
@@ -294,14 +318,16 @@ function main(){
 					task = new Task();
 					task.init();			
 				}
-				//config.txt中所有任务对已经完成，结束程序！
+				//config.txt中所有任务对已经完成，程序出口，结束程序！
 				else{
 					console.log('All tasks in "config.txt" has been dong!!!');
 					clearInterval(interval_handle);
+					//强制退出进程，防止有时卡死无法退出的情况
+					process.exit(0);
 				}
 			}
 		}
-	}, 1*1000);
+	}, 10*1000);
 }
 
 
