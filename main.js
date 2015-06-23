@@ -3,14 +3,17 @@ var fs = require('fs'),					//读写文件模块
 	_ = require('underscore'),			//underscore模块
 
 	threads = 1,						//默认线程数
+	timeout = 10000,					//默认超时时间(10秒)
+	retries = 5,						//默认重试次数
 	task,								//当前任务对象
-	taskName = '',						//当前任务名（用于txt输出）
+	taskName = '',						//当前任务名（用于输出txt的名字）
 	taskUrl = '',						//当前任务url
-	hostUrl = '',						//当前主机地址
-	configTaskQueue = [],				//配置文件入口，任务队列
+	hostUrl = '',						//当前任务主域名
+	configTaskQueue = [],				//配置文件任务入口
 	workQueue = [],						//任务的对应主工作队列
+	workerArray = [],					//worker数组
 	hasDone = [],						//去重，记录所有已爬取过的url
-	workerArray = [];					//worker数组
+	retryCount = {};					//超时重试次数记录
 
 
 //读取config.txt配置文件
@@ -25,6 +28,8 @@ function getConfig() {
 			try{
 				var config = JSON.parse(data);
 				threads = parseInt(config['threads']);
+				timeout = parseInt(config['timeout']);
+				retries = parseInt(config['retries']);
 				configTaskQueue = config['tasks'];
 
 				//根据线程数，初始化worker
@@ -75,6 +80,7 @@ function getStart(){
 function cleanFiles(){
 	return new Promise(function(resolve, reject){
 		var write_cnt = 0;
+		//确保两个文件都写完才调用resolve
 		function finish_writing(){
 			if (write_cnt == 2){
 				resolve();
@@ -99,15 +105,15 @@ function cleanFiles(){
 	});
 }
 
-//主Worker类
+//定义主Worker类
 function Worker(){
 	this.working = false;		//工作状态
 	this.num = 0;				//线程号
 	this.url = '';				//当前工作中url
-	this.startTime;				//记录任务开始时间
+	this.startTime;				//记录任务开始时间(用于超时处理)
 }
 
-//Worker加载url对应路由，找出处理文件
+//(原型方法)Worker加载url对应路由，找出处理文件
 Worker.prototype.queryRouter = function(url){
 	var routerFile = require('./website/' + hostUrl + '/_.js');
 	var router = routerFile()['route'];
@@ -229,7 +235,7 @@ Worker.prototype.startup = function(){
 }
 
 
-//task工作类。同时刻只能有一个活动对象
+//定义task工作类。同时刻只能有一个活动task对象
 function Task(){
 	var interval_handle1,
 		interval_handle2;
@@ -259,19 +265,33 @@ function Task(){
 				}
 			}, 200);
 
-			//每相隔(5)秒，检查worker是否已超时。超时时间(10)秒
+			//每相隔(5)秒，根据配置超时时间，检查worker是否已超时。
 			interval_handle2 = setInterval(function(){
 				var date = new Date();
 				var time = date.getTime();
 				for (var i = 0; i < threads; i++) {
-					if (time - workerArray[i].startTime > 10*1000){
+					//超时
+					if (time - workerArray[i].startTime > timeout){
+						//提出worker线程号与超时的url
 						var num = workerArray[i].num;
 						var url = workerArray[i].url;
 						console.log('Thread ' + num + ' timeout!!!Start a new thread!');
+						//清除原worker，用新的替代
 						workerArray[i] = new Worker();
 						workerArray[i].num = num;
 
-						workQueue.push(url);
+						//已经重试过
+						if (retryCount[url]){
+							//重试次数小于配置总次数，继续重试
+							if (retryCount[url] < retries){
+								workQueue.push(url);
+								retryCount[url] ++;
+							}
+						}
+						else{
+							workQueue.push(url);
+							retryCount[url] = 1;
+						}
 					}
 				}
 			}, 5*1000)	;
@@ -298,9 +318,9 @@ function main(){
 	});
 
 	//每隔(10)秒，定时检查当前task是否已完成
-	var interval_handle = setInterval(function(){
+	setInterval(function(){
 		if (workQueue.length == 0){
-			//有worker处于工作状态，未完成
+			//若为true，有worker处于工作状态，task未完成
 			var notFinish = _.some(workerArray, function(worker){
 				return worker.working;
 			});
@@ -320,8 +340,8 @@ function main(){
 				}
 				//config.txt中所有任务对已经完成，程序出口，结束程序！
 				else{
-					console.log('All tasks in "config.txt" has been dong!!!');
-					clearInterval(interval_handle);
+					console.log('All tasks in "config.txt" has been done!!!');
+					console.log(' ');
 					//强制退出进程，防止有时卡死无法退出的情况
 					process.exit(0);
 				}

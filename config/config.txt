@@ -1,5 +1,7 @@
 {
 	"threads" : "30",
+	"timeout" : "10000",
+	"retries" : "3",
 	"tasks" : [
 		{
 			"name": "王俊凯",
