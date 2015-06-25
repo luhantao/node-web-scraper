@@ -2,7 +2,7 @@ var fs = require('fs'),					//读写文件模块
 	Promise = require('bluebird'),		//Promise模块
 	_ = require('underscore'),			//underscore模块
 
-	threads = 1,						//默认线程数
+	workerNums = 1,						//默认worker个数
 	timeout = 10000,					//默认超时时间(10秒)
 	retries = 5,						//默认重试次数
 	task,								//当前任务对象
@@ -27,13 +27,13 @@ function getConfig() {
 			//解析json，拿出线程数与入口url
 			try{
 				var config = JSON.parse(data);
-				threads = parseInt(config['threads']);
+				workerNums = parseInt(config['workerNums']);
 				timeout = parseInt(config['timeout']);
 				retries = parseInt(config['retries']);
 				configTaskQueue = config['tasks'];
 
 				//根据线程数，初始化worker
-				for (var i = 0; i < threads; i++) {
+				for (var i = 0; i < workerNums; i++) {
 					var worker = new Worker();
 					worker.num = i+1;
 					workerArray.push(worker);
@@ -209,7 +209,7 @@ Worker.prototype.startup = function(){
 
 	//将工作状态置为true
 	that.working = true;
-	console.log('Thread ' + that.num + ' start -> ' + that.url);
+	console.log('Worker ' + that.num + ' start -> ' + that.url);
 
 	//启动工作
 	that
@@ -225,12 +225,12 @@ Worker.prototype.startup = function(){
 	.then(function(){
 		//工作完成，将worker状态置为false
 		that.working = false;
-		console.log('Thread ' + that.num + ' finish!');
+		console.log('Worker ' + that.num + ' finish!');
 	})
 	.catch(function(err){
 		//任务除错，抛弃任务
 		that.working = false;
-		console.error('Thread ' + that.num + ' ' +err);
+		console.error('Worker ' + that.num + ' ' +err);
 	});
 }
 
@@ -249,7 +249,7 @@ function Task(){
 			//每相隔(200)毫秒，定时检查worker状态。空闲则分配新任务
 			interval_handle1 = setInterval(function(){
 				//有未处理任务
-				for (var i = 0; i < threads; i++) {
+				for (var i = 0; i < workerNums; i++) {
 					if (workQueue.length > 0){
 						//worker空闲，派发新任务
 						if (!workerArray[i].working){
@@ -269,13 +269,13 @@ function Task(){
 			interval_handle2 = setInterval(function(){
 				var date = new Date();
 				var time = date.getTime();
-				for (var i = 0; i < threads; i++) {
+				for (var i = 0; i < workerNums; i++) {
 					//超时
 					if (time - workerArray[i].startTime > timeout){
 						//提出worker线程号与超时的url
 						var num = workerArray[i].num;
 						var url = workerArray[i].url;
-						console.log('Thread ' + num + ' timeout!!!Start a new thread!');
+						console.log('Worker ' + num + ' timeout!!!Start a new worker!');
 						//清除原worker，用新的替代
 						workerArray[i] = new Worker();
 						workerArray[i].num = num;

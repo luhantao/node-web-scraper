@@ -1,5 +1,5 @@
 {
-	"threads" : "30",
+	"workerNums" : "30",
 	"timeout" : "10000",
 	"retries" : "3",
 	"tasks" : [
