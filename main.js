@@ -1,6 +1,7 @@
 var fs = require('fs'),					//读写文件模块
 	Promise = require('bluebird'),		//Promise模块
 	_ = require('underscore'),			//underscore模块
+	colors = require('colors/safe'),	//命令行字体颜色模块
 
 	workerNums = 1,						//默认worker个数
 	timeout = 10000,					//默认超时时间(10秒)
@@ -42,7 +43,7 @@ function getConfig() {
 				resolve();
 			}
 			catch (err){
-				console.error(err);
+				console.log(colors.red.bold(err));
 				reject(err);
 			}
 		});	
@@ -63,14 +64,14 @@ function getStart(){
 			hostUrl = hostUrl.split('/')[0];
 			workQueue.push(taskUrl);
 
-			console.log('================================');
-			console.log('Start grabbing task: ' + taskName);
-			console.log('================================');
+			console.log(colors.cyan.bold('================================'));
+			console.log(colors.cyan.bold('Start grabbing task: ' + taskName));
+			console.log(colors.cyan.bold('================================'));
 
 			resolve();
 		}
 		else{
-			console.error('Get tasks in "config.txt" err!');
+			console.log(colors.red.bold('Get tasks in "config.txt" err!'));
 			reject();
 		}
 	});
@@ -225,12 +226,12 @@ Worker.prototype.startup = function(){
 	.then(function(){
 		//工作完成，将worker状态置为false
 		that.working = false;
-		console.log('Worker ' + that.num + ' finish!');
+		console.log(colors.green('Worker ' + that.num + ' grab successfully!'));
 	})
 	.catch(function(err){
 		//任务除错，抛弃任务
 		that.working = false;
-		console.error('Worker ' + that.num + ' ' +err);
+		console.log(colors.red.bold('Worker ' + that.num + ' ' +err));
 	});
 }
 
@@ -265,7 +266,7 @@ function Task(){
 				}
 			}, 200);
 
-			//每相隔(5)秒，根据配置超时时间，检查worker是否已超时。
+			//每相隔(3)秒，根据配置超时时间，检查worker是否已超时。
 			interval_handle2 = setInterval(function(){
 				var date = new Date();
 				var time = date.getTime();
@@ -275,7 +276,7 @@ function Task(){
 						//提出worker线程号与超时的url
 						var num = workerArray[i].num;
 						var url = workerArray[i].url;
-						console.log('Worker ' + num + ' timeout!!!Start a new worker!');
+						console.log(colors.red.bold('Worker ' + num + ' timeout!!! Start a new orker!'));
 						//清除原worker，用新的替代
 						workerArray[i] = new Worker();
 						workerArray[i].num = num;
@@ -294,7 +295,7 @@ function Task(){
 						}
 					}
 				}
-			}, 5*1000)	;
+			}, 3*1000)	;
 		})
 	};
 	this.done = function(){
@@ -312,7 +313,7 @@ function main(){
 		task.init();
 	})
 	.catch(function(err){
-		console.error(err);
+		console.log(colors.red.bold(err));
 		task.done();
 		task = null;
 	});
@@ -331,7 +332,7 @@ function main(){
 				task.done();
 				task = null;
 				console.log(' ');
-				console.log('current task done! Getting new task...');
+				console.log(colors.cyan.bold('current task done! Getting new task...'));
 				console.log(' ');
 				//若有，则取下一个任务
 				if (configTaskQueue.length > 0){
@@ -340,7 +341,7 @@ function main(){
 				}
 				//config.txt中所有任务对已经完成，程序出口，结束程序！
 				else{
-					console.log('All tasks in "config.txt" has been done!!!');
+					console.log(colors.blue.bold('All tasks in "config.txt" has been done!!!'));
 					console.log(' ');
 					//强制退出进程，防止有时卡死无法退出的情况
 					process.exit(0);
