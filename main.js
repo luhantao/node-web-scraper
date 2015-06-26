@@ -111,7 +111,6 @@ function Worker(){
 	this.working = false;		//工作状态
 	this.num = 0;				//线程号
 	this.url = '';				//当前工作中url
-	this.startTime;				//记录任务开始时间(用于超时处理)
 }
 
 //(原型方法)Worker加载url对应路由，找出处理文件
@@ -205,13 +204,13 @@ Worker.prototype.writeData = function(data){
 Worker.prototype.startup = function(){
 	var that = this;
 
-	var date = new Date();
-	that.startTime = date.getTime();
+	//启动超时函数记录，timeout时间根据全局配置
+	var set_timeout = setTimeout(that.hasTimeout.bind(that), timeout);
 
 	//将工作状态置为true
 	that.working = true;
-	console.log('Worker ' + that.num + ' start -> ' + that.url);
 
+	console.log('Worker ' + that.num + ' start -> ' + that.url);
 	//启动工作
 	that
 	.queryRouter(that.url)
@@ -224,22 +223,77 @@ Worker.prototype.startup = function(){
 		return that.writeData(data);
 	})
 	.then(function(){
+		console.log(colors.green('Worker ' + that.num + ' grab successfully!'));
 		//工作完成，将worker状态置为false
 		that.working = false;
-		console.log(colors.green('Worker ' + that.num + ' grab successfully!'));
+		clearTimeout(set_timeout);
+		that.urlDone();
 	})
 	.catch(function(err){
+		console.log(colors.red.bold('Worker ' + that.num + ' ' +err));
 		//任务除错，抛弃任务
 		that.working = false;
-		console.log(colors.red.bold('Worker ' + that.num + ' ' +err));
+		clearTimeout(set_timeout);
+		that.urlDone();
 	});
 }
 
+//worker完成一个url后，直接触发自定义事件，请求新url，并触发所有worker一起来high！
+//是对直接setInterval定时检测分配的方式进行优化；可减轻线程中事件堆积，均衡同一瞬间的网络请求，提高worker利用率与成功率
+Worker.prototype.urlDone = function(){
+	for (var i = 0; i < workerNums; i++) {
+		if (workQueue.length > 0){
+			if (!workerArray[i].working){
+				var taskUrl = workQueue.shift();
+				workerArray[i].url = taskUrl;
+				workerArray[i].startup();
+			}
+		}
+		else{
+			break;
+		}
+	}
+}
+
+//worker失败超时函数
+Worker.prototype.hasTimeout = function(){
+	console.log(colors.yellow.bold('Worker ' + this.num + ' timeout!!! Start a new worker!'));
+	//工作状态置为空闲
+	this.working = false;
+
+	//对超时的url，判断是否要重新加进工作队列
+	var failed_url = this.url;
+
+	//已经重试过
+	if (retryCount[failed_url]){
+		//重试次数小于配置总次数，继续重试
+		if (retryCount[failed_url] < retries){
+			workQueue.push(failed_url);
+			retryCount[failed_url] ++;
+		}
+	}
+	else{
+		workQueue.push(failed_url);
+		retryCount[failed_url] = 1;
+	}
+
+	//请求新任务
+	for (var i = 0; i < workerNums; i++) {
+		if (workQueue.length > 0){
+			if (!workerArray[i].working){
+				var taskUrl = workQueue.shift();
+				workerArray[i].url = taskUrl;
+				workerArray[i].startup();
+			}
+		}
+		else{
+			break;
+		}
+	}
+}
 
 //定义task工作类。同时刻只能有一个活动task对象
 function Task(){
-	var interval_handle1,
-		interval_handle2;
 	//初始启动 + 配置全局变量 + 清空原有数据
 	this.init = function(){
 		getStart()
@@ -247,60 +301,11 @@ function Task(){
 			return cleanFiles();
 		})
 		.then(function(){
-			//每相隔(200)毫秒，定时检查worker状态。空闲则分配新任务
-			interval_handle1 = setInterval(function(){
-				//有未处理任务
-				for (var i = 0; i < workerNums; i++) {
-					if (workQueue.length > 0){
-						//worker空闲，派发新任务
-						if (!workerArray[i].working){
-							var taskUrl = workQueue.shift();
-							workerArray[i].url = taskUrl;
-							workerArray[i].startup();
-						}
-					}
-					else{
-						//暂时任务队列为空
-						break ;
-					}
-				}
-			}, 200);
-
-			//每相隔(3)秒，根据配置超时时间，检查worker是否已超时。
-			interval_handle2 = setInterval(function(){
-				var date = new Date();
-				var time = date.getTime();
-				for (var i = 0; i < workerNums; i++) {
-					//超时
-					if (time - workerArray[i].startTime > timeout){
-						//提出worker线程号与超时的url
-						var num = workerArray[i].num;
-						var url = workerArray[i].url;
-						console.log(colors.red.bold('Worker ' + num + ' timeout!!! Start a new orker!'));
-						//清除原worker，用新的替代
-						workerArray[i] = new Worker();
-						workerArray[i].num = num;
-
-						//已经重试过
-						if (retryCount[url]){
-							//重试次数小于配置总次数，继续重试
-							if (retryCount[url] < retries){
-								workQueue.push(url);
-								retryCount[url] ++;
-							}
-						}
-						else{
-							workQueue.push(url);
-							retryCount[url] = 1;
-						}
-					}
-				}
-			}, 3*1000)	;
+			//开始工作！
+			var taskUrl = workQueue.shift();
+			workerArray[0].url = taskUrl;
+			workerArray[0].startup();
 		})
-	};
-	this.done = function(){
-		clearInterval(interval_handle1);
-		clearInterval(interval_handle2);
 	};
 }
 
@@ -314,7 +319,6 @@ function main(){
 	})
 	.catch(function(err){
 		console.log(colors.red.bold(err));
-		task.done();
 		task = null;
 	});
 
@@ -329,10 +333,9 @@ function main(){
 			//所有worker空闲，证明原任务已完成
 			if (!notFinish){
 				//清空原任务
-				task.done();
 				task = null;
 				console.log(' ');
-				console.log(colors.cyan.bold('current task done! Getting new task...'));
+				console.log(colors.cyan.bold('Current task is done! Getting new task...'));
 				console.log(' ');
 				//若有，则取下一个任务
 				if (configTaskQueue.length > 0){
