@@ -144,7 +144,6 @@ Worker.prototype.queryRouter = function(url){
 			reject('NO MATCH PATH');
 		}
 	});
-
 }
 
 //Worker获得数据后写入到文件
@@ -257,7 +256,7 @@ Worker.prototype.urlDone = function(){
 
 //worker失败超时函数
 Worker.prototype.hasTimeout = function(){
-	console.log(colors.yellow.bold('Worker ' + this.num + ' timeout!!! Start a new worker!'));
+	console.log(colors.yellow.bold('Worker ' + this.num + ' timeout!!! Restart worker!'));
 	//工作状态置为空闲
 	this.working = false;
 
