@@ -3,7 +3,7 @@
 
 ============
 
-在config/config.txt中配置worker数目，超时时间，与入口网站url数组。
+在config/config.txt中配置worker数目，超时时间，与入口任务数组。
 
 ###启动方式为 'node main.js' 
 
