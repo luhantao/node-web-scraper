@@ -1,7 +1,8 @@
 {
-	"workerNums" : "10",
-	"timeout" : "6000",
-	"retries" : "1",
+	"threadNums" : "4",
+	"workerNums" : "2",
+	"timeout" : "10000",
+	"retries" : "3",
 	"tasks" : [
 		{
 			"name": "王俊凯",

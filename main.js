@@ -1,8 +1,10 @@
-var fs = require('fs'),					//读写文件模块
+var cluster = require('cluster'),		//多进程模块
+ 	fs = require('fs'),					//读写文件模块
 	Promise = require('bluebird'),		//Promise模块
 	_ = require('underscore'),			//underscore模块
 	colors = require('colors/safe'),	//命令行字体颜色模块
 
+	threadNums = 1,						//默认子进程数
 	workerNums = 1,						//默认worker个数
 	timeout = 10000,					//默认超时时间(10秒)
 	retries = 5,						//默认重试次数
@@ -17,8 +19,8 @@ var fs = require('fs'),					//读写文件模块
 	retryCount = {};					//超时重试次数记录
 
 
-//读取config.txt配置文件
-function getConfig() {
+//主进程读取config.txt配置文件
+function master_getConfig() {
 	return new Promise(function(resolve, reject){
 		fs.readFile('./config/config.txt', 'utf-8', function(err, data){
 			if (err){
@@ -28,17 +30,11 @@ function getConfig() {
 			//解析json，拿出线程数与入口url
 			try{
 				var config = JSON.parse(data);
+				threadNums = parseInt(config['threadNums']);
 				workerNums = parseInt(config['workerNums']);
 				timeout = parseInt(config['timeout']);
 				retries = parseInt(config['retries']);
 				configTaskQueue = config['tasks'];
-
-				//根据线程数，初始化worker
-				for (var i = 0; i < workerNums; i++) {
-					var worker = new Worker();
-					worker.num = i+1;
-					workerArray.push(worker);
-				}
 
 				resolve();
 			}
@@ -50,30 +46,55 @@ function getConfig() {
 	});	
 }
 
-//根据configTaskQueue中读入的任务，取出第一个，并初始化全局变量
-function getStart(){
+//子进程更新配置信息
+function childProc_updateConfig(){
 	return new Promise(function(resolve, reject){
-		if (configTaskQueue.length > 0){
-			var getNewTask = configTaskQueue.shift();
-			//全局记录当前任务
-			taskName = getNewTask['name'];
-			taskUrl = getNewTask['url'];
+		process.on('message', function(message){
+			if (message.type == 'updateConfig'){
+				workerNums = message.workerNums;
+				timeout = message.timeout;
+				retries = message.retries;
 
-			//取出根域名
-			hostUrl = taskUrl.replace(/http(s*):\/\//, '');
-			hostUrl = hostUrl.split('/')[0];
-			workQueue.push(taskUrl);
+				resolve();
+			}
+		});
+	});
+}
 
-			console.log(colors.cyan.bold('================================'));
-			console.log(colors.cyan.bold('Start grabbing task: ' + taskName));
-			console.log(colors.cyan.bold('================================'));
+//子进程向主进程请求task，并初始化
+function childProc_getStart(){
+	return new Promise(function(resolve, reject){
+		//向主进程请求获得新任务
+		process.send({
+			type: 'getNewTask',
+		});
+		process.on('message', function(message){
+			if (message.type == 'hasNewTask'){
+				var getNewTask = message.newTask;
+				//全局记录当前任务
+				taskName = getNewTask['name'];
+				taskUrl = getNewTask['url'];
 
-			resolve();
-		}
-		else{
-			console.log(colors.red.bold('Get tasks in "config.txt" err!'));
-			reject();
-		}
+				//取出根域名
+				hostUrl = taskUrl.replace(/http(s*):\/\//, '');
+				hostUrl = hostUrl.split('/')[0];
+				workQueue.push(taskUrl);
+
+				console.log(colors.cyan.bold('====================================='));
+				console.log(colors.cyan.bold('Thread ' + cluster.worker.id + ' start grabbing task: ' + taskName));
+				console.log(colors.cyan.bold('====================================='));
+
+				//根据配置worker数，初始化worker
+				workerArray = [];
+				for (var i = 0; i < workerNums; i++) {
+					var worker = new Worker();
+					worker.num = i+1;
+					workerArray.push(worker);
+				}
+
+				resolve();
+			}
+		});
 	});
 }
 
@@ -209,7 +230,7 @@ Worker.prototype.startup = function(){
 	//将工作状态置为true
 	that.working = true;
 
-	console.log('Worker ' + that.num + ' start -> ' + that.url);
+	console.log('Thread ' + cluster.worker.id + ' Worker ' + that.num + ' start -> ' + that.url);
 	//启动工作
 	that
 	.queryRouter(that.url)
@@ -222,14 +243,35 @@ Worker.prototype.startup = function(){
 		return that.writeData(data);
 	})
 	.then(function(){
-		console.log(colors.green('Worker ' + that.num + ' grab successfully!'));
+		console.log(colors.green('Thread ' + cluster.worker.id + ' Worker ' + that.num + ' grab successfully!'));
 		//工作完成，将worker状态置为false
 		that.working = false;
 		clearTimeout(set_timeout);
 		that.urlDone();
 	})
 	.catch(function(err){
-		console.log(colors.red.bold('Worker ' + that.num + ' ' +err));
+		console.log(colors.red.bold('Thread ' + cluster.worker.id + ' Worker ' + that.num + ' ' +err));
+		//socket hang up 错误时候加入队列重试
+		if (err == 'Error: socket hang up'){
+			var failed_url = that.url;
+
+			if (retries > 0){
+				//已经重试过
+				if (retryCount[failed_url]){
+					//重试次数小于配置总次数，继续重试
+					if (retryCount[failed_url] < retries){
+						console.log(colors.yellow('Socket hang up retry'));
+						workQueue.push(failed_url);
+						retryCount[failed_url] ++;
+					}
+				}
+				else{
+					console.log(colors.yellow('Socket hang up retry'));
+					workQueue.push(failed_url);
+					retryCount[failed_url] = 1;
+				}
+			}
+		}
 		//任务除错，抛弃任务
 		that.working = false;
 		clearTimeout(set_timeout);
@@ -256,24 +298,26 @@ Worker.prototype.urlDone = function(){
 
 //worker失败超时函数
 Worker.prototype.hasTimeout = function(){
-	console.log(colors.yellow.bold('Worker ' + this.num + ' timeout!!! Restart worker!'));
+	console.log(colors.yellow.bold('Thread ' + cluster.worker.id + ' Worker ' + this.num + ' timeout!!! Restart worker!'));
 	//工作状态置为空闲
 	this.working = false;
 
 	//对超时的url，判断是否要重新加进工作队列
 	var failed_url = this.url;
 
-	//已经重试过
-	if (retryCount[failed_url]){
-		//重试次数小于配置总次数，继续重试
-		if (retryCount[failed_url] < retries){
-			workQueue.push(failed_url);
-			retryCount[failed_url] ++;
+	if (retries > 0){
+		//已经重试过
+		if (retryCount[failed_url]){
+			//重试次数小于配置总次数，继续重试
+			if (retryCount[failed_url] < retries){
+				workQueue.push(failed_url);
+				retryCount[failed_url] ++;
+			}
 		}
-	}
-	else{
-		workQueue.push(failed_url);
-		retryCount[failed_url] = 1;
+		else{
+			workQueue.push(failed_url);
+			retryCount[failed_url] = 1;
+		}
 	}
 
 	//请求新任务
@@ -295,7 +339,7 @@ Worker.prototype.hasTimeout = function(){
 function Task(){
 	//初始启动 + 配置全局变量 + 清空原有数据
 	this.init = function(){
-		getStart()
+		childProc_getStart()
 		.then(function(){
 			return cleanFiles();
 		})
@@ -305,52 +349,96 @@ function Task(){
 			workerArray[0].url = taskUrl;
 			workerArray[0].startup();
 		})
+		.catch(function(err){
+			console.log(colors.red.bold(err));
+			this = null;
+			retrun ;
+		});
 	};
 }
 
 //主入口函数
 function main(){
-	//初始调用getConfig，然后启动任务函数
-	getConfig()
-	.then(function(){
-		task = new Task();
-		task.init();
-	})
-	.catch(function(err){
-		console.log(colors.red.bold(err));
-		task = null;
-	});
+	//主进程
+	if (cluster.isMaster){
+		//读取配置文件
+		master_getConfig()
+		.then(function(){
+			//记录被杀死的子进程数
+			var thread_killed_num = 0;
+			//初始化子进程
+			var threads = [];
+			for (var i = 0; i < threadNums; i++){
+				threads[i] = cluster.fork();
+				//发送配置文件中信息给子进程
+				threads[i].send({
+					type: 'updateConfig',
+					workerNums: workerNums,
+					timeout: timeout,
+					retries: retries,
+				});
 
-	//每隔(10)秒，定时检查当前task是否已完成
-	setInterval(function(){
-		if (workQueue.length == 0){
-			//若为true，有worker处于工作状态，task未完成
-			var notFinish = _.some(workerArray, function(worker){
-				return worker.working;
-			});
-			
-			//所有worker空闲，证明原任务已完成
-			if (!notFinish){
-				//清空原任务
-				task = null;
-				console.log(' ');
-				console.log(colors.cyan.bold('Current task is done! Getting new task...'));
-				console.log(' ');
-				//若有，则取下一个任务
-				if (configTaskQueue.length > 0){
+				(function(i){
+					//主进程监听子进程消息
+					threads[i].on('message', function(message){
+						if (message.type == 'getNewTask'){
+							//有未处理task
+							if (configTaskQueue.length > 0){
+								var newTask = configTaskQueue.shift();
+								threads[i].send({
+									type: 'hasNewTask',
+									newTask: newTask
+								});
+							}
+							//任务已全部派发完毕，杀死子进程！
+							else{
+								console.log(colors.cyan('All tasks in "config.txt" has been handled or are handling. Thread ' + (i+1) + ' killed!!!'));
+								threads[i].kill();
+								thread_killed_num ++;
+								//全部子进程被杀，全部任务完成，结束主进程！
+								if (thread_killed_num == threadNums){
+									console.log(colors.blue.bold('All tasks in "config.txt" has been done!!!'));
+									console.log(' ');
+									process.exit(0);
+								}
+							}
+						}
+					});
+				})(i);
+
+			}
+		})
+	}
+	//子进程
+	else{
+		childProc_updateConfig()
+		.then(function(){
+			task = new Task();
+			task.init();
+		});
+
+		//每隔(10)秒，定时检查当前task是否已完成
+		setInterval(function(){
+			if (workQueue.length == 0){
+				//若为true，有worker处于工作状态，task未完成
+				var notFinish = _.some(workerArray, function(worker){
+					return worker.working;
+				});
+				
+				//所有worker空闲，证明原任务已完成
+				if (!notFinish){
+					//清空原任务
+					task = null;
+					console.log(' ');
+					console.log(colors.cyan.bold('Current task is done! Getting new task...'));
+					console.log(' ');
+					//取下一个任务
 					task = new Task();
 					task.init();			
 				}
-				//config.txt中所有任务对已经完成，程序出口，结束程序！
-				else{
-					console.log(colors.blue.bold('All tasks in "config.txt" has been done!!!'));
-					console.log(' ');
-					//强制退出进程，防止有时卡死无法退出的情况
-					process.exit(0);
-				}
 			}
-		}
-	}, 10*1000);
+		}, 10*1000);
+	}
 }
 
 
