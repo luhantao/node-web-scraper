@@ -260,13 +260,13 @@ Worker.prototype.startup = function(){
 				if (retryCount[failed_url]){
 					//重试次数小于配置总次数，继续重试
 					if (retryCount[failed_url] < retries){
-						console.log(colors.yellow('Socket hang up retry'));
+						console.log(colors.yellow('Socket hang up, retry'));
 						workQueue.push(failed_url);
 						retryCount[failed_url] ++;
 					}
 				}
 				else{
-					console.log(colors.yellow('Socket hang up retry'));
+					console.log(colors.yellow('Socket hang up, retry'));
 					workQueue.push(failed_url);
 					retryCount[failed_url] = 1;
 				}
@@ -392,12 +392,12 @@ function main(){
 							}
 							//任务已全部派发完毕，杀死子进程！
 							else{
-								console.log(colors.cyan('All tasks in "config.txt" has been handled or are handling. Thread ' + (i+1) + ' killed!!!'));
+								console.log(colors.cyan('No more new Tasks, kill thread ' + (i+1)));
 								threads[i].kill();
 								thread_killed_num ++;
 								//全部子进程被杀，全部任务完成，结束主进程！
 								if (thread_killed_num == threadNums){
-									console.log(colors.blue.bold('All tasks in "config.txt" has been done!!!'));
+									console.log(colors.blue.bold('All tasks in "config.txt" has been finished!!! Program exit'));
 									console.log(' ');
 									process.exit(0);
 								}
@@ -430,7 +430,7 @@ function main(){
 					//清空原任务
 					task = null;
 					console.log(' ');
-					console.log(colors.cyan.bold('Current task is done! Getting new task...'));
+					console.log(colors.cyan.bold('Task in thread ' + cluster.worker.id + ' is done! Getting new task...'));
 					console.log(' ');
 					//取下一个任务
 					task = new Task();
