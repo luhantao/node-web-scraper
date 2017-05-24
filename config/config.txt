@@ -9,8 +9,8 @@
 			"url": "http://www.soku.com/search_video/q_%E7%8E%8B%E4%BF%8A%E5%87%AF_orderby_1"
 		},
 		{
-			"name": "王源",
-			"url": "http://www.soku.com/search_video/q_%E7%8E%8B%E6%BA%90?f=1&kb=020200000000000_%E7%8E%8B%E4%BF%8A%E5%87%AF_%E7%8E%8B%E6%BA%90"
+			"name": "知乎",
+			"url": "http://www.zhihu.com"
 		}
 	]
 }
