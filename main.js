@@ -351,7 +351,7 @@ function Task(){
 		})
 		.catch(function(err){
 			console.log(colors.red.bold(err));
-			this = null;
+			//this = null;
 			retrun ;
 		});
 	};
